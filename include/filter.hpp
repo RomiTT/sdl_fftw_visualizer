@@ -14,26 +14,28 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef PULSEAUDIO_HPP
-#define PULSEAUDIO_HPP
+#ifndef FILTER_HPP
+#define FILTER_HPP
 
-#include "../data_source.hpp"
-#include <pulse/simple.h>
+#include <stddef.h>
 
 namespace visualize {
-    struct pulseaudio_source : public data_source {
-        pulseaudio_source(size_t buffer_len);
-        ~pulseaudio_source() override;
-        // disable copy
-        pulseaudio_source(const pulseaudio_source &) = delete;
-        pulseaudio_source &operator=(const pulseaudio_source &) = delete;
+    //! Abstraction for post-processing filters. These filters are applied after fftw computations
+    struct filter {
+        virtual ~filter() = default;
+        /** \brief Applies filter to \p output
+         *
+         * \param output Data buffer to apply to
+         */
+        void apply(double *output);
 
     private:
-        bool do_grab_audio(double *output) override;
-        size_t buffer_len;
-        pa_simple *simple = nullptr;
-        std::unique_ptr<int16_t[]> pulse_buffer;
+        /** \brief Applies filter to \p output
+         *
+         * \param output Data buffer to apply to
+         */
+        virtual void do_apply(double *output) = 0;
     };
 } // namespace visualize
 
-#endif // PULSEAUDIO_HPP
+#endif // FILTER_HPP

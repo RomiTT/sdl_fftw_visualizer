@@ -14,26 +14,23 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef PULSEAUDIO_HPP
-#define PULSEAUDIO_HPP
+#ifndef PEEK_FILTER_HPP
+#define PEEK_FILTER_HPP
 
-#include "../data_source.hpp"
-#include <pulse/simple.h>
+#include "../filter.hpp"
+#include <memory>
 
 namespace visualize {
-    struct pulseaudio_source : public data_source {
-        pulseaudio_source(size_t buffer_len);
-        ~pulseaudio_source() override;
-        // disable copy
-        pulseaudio_source(const pulseaudio_source &) = delete;
-        pulseaudio_source &operator=(const pulseaudio_source &) = delete;
+    struct peek_filter : public filter {
+        peek_filter(size_t size, double gravity);
 
     private:
-        bool do_grab_audio(double *output) override;
-        size_t buffer_len;
-        pa_simple *simple = nullptr;
-        std::unique_ptr<int16_t[]> pulse_buffer;
+        void do_apply(double *data) override;
+
+        std::unique_ptr<double[]> peeks;
+        size_t data_size;
+        double gravity;
     };
 } // namespace visualize
 
-#endif // PULSEAUDIO_HPP
+#endif // PEEK_FILTER_HPP

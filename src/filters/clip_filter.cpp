@@ -14,26 +14,13 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef PULSEAUDIO_HPP
-#define PULSEAUDIO_HPP
+#include "filters/clip_filter.hpp"
+#include <algorithm>
 
-#include "../data_source.hpp"
-#include <pulse/simple.h>
+visualize::clip_filter::clip_filter(size_t size) : buffer_size(size) {}
 
-namespace visualize {
-    struct pulseaudio_source : public data_source {
-        pulseaudio_source(size_t buffer_len);
-        ~pulseaudio_source() override;
-        // disable copy
-        pulseaudio_source(const pulseaudio_source &) = delete;
-        pulseaudio_source &operator=(const pulseaudio_source &) = delete;
-
-    private:
-        bool do_grab_audio(double *output) override;
-        size_t buffer_len;
-        pa_simple *simple = nullptr;
-        std::unique_ptr<int16_t[]> pulse_buffer;
-    };
-} // namespace visualize
-
-#endif // PULSEAUDIO_HPP
+void visualize::clip_filter::do_apply(double *data) {
+    for (size_t i = 0; i < buffer_size; i++) {
+        data[i] = std::min(data[i], 1.0);
+    }
+}

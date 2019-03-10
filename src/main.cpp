@@ -16,92 +16,103 @@
  */
 
 #include <SDL.h>
-#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <data_sources/pulseaudio.hpp>
 #include <fftw3.h>
+#include <filter.hpp>
+#include <filters/clip_filter.hpp>
+#include <filters/peek_filter.hpp>
+#include <filters/sagc_filter.hpp>
+#include <functional>
 #include <iostream>
-#include <math.h>
 #include <mutex>
 #include <thread>
 
 namespace visualize {
-    static std::atomic_bool run = true;
-    //! Normalized (0.0-0.1) output
-    static std::unique_ptr<double[]> buffer;
-    static std::mutex buffer_lock;
+    struct color {
+        uint8_t r, g, b;
+    };
+
+    struct buffer {
+        buffer(size_t size) : data_size(size), data(std::make_unique<double[]>(size)) {}
+        std::pair<double *, std::unique_lock<std::mutex>> acquire() {
+            return std::make_pair(data.get(), std::unique_lock(lock));
+        }
+
+        buffer(const buffer &other) = delete;
+        buffer &operator=(const buffer &other) = delete;
+
+        const size_t data_size;
+
+    private:
+        std::unique_ptr<double[]> data;
+        std::mutex lock;
+    };
+
     static struct {
         //! gravity shall be 1000 * peek_reduction_per_sample
         double gravity = 100.0 / 6.0;
-        long barcount = 150;
+        int barcount = 160;
+        size_t resolution = 2048;
+        color background = { 0, 0, 0 };
+        color foreground = { 255, 255, 255 };
     } config;
 
-    void audio_thread(size_t complex_count, std::unique_ptr<data_source> src) {
-        auto fftw_in = std::make_unique<double[]>(complex_count * 2);
-        auto fftw_out = std::make_unique<fftw_complex[]>(complex_count + 1);
+    void audio_thread(std::atomic_bool &run, buffer &buffer, std::function<std::unique_ptr<data_source>()> factory,
+                      std::vector<std::unique_ptr<filter>> &filters) {
+        auto src = factory();
 
-        // auto gain control
-        double gain = 1;
+        auto fftw_in = std::make_unique<double[]>(buffer.data_size * 2);
+        auto fftw_out = std::make_unique<fftw_complex[]>(buffer.data_size + 1);
+        auto plan = fftw_plan_dft_r2c_1d(int(buffer.data_size * 2), fftw_in.get(), fftw_out.get(), FFTW_MEASURE);
 
-        auto plan = fftw_plan_dft_r2c_1d(int(complex_count * 2), fftw_in.get(), fftw_out.get(), FFTW_MEASURE);
-
-        // no need to recompute this value
-        double gravity = config.gravity / 1000;
         while (run.load(std::memory_order_relaxed)) {
-            src->grab_audio(fftw_in.get(), gain);
+            if (!src->grab_audio(fftw_in.get())) {
+                run.store(false, std::memory_order_relaxed);
+                break;
+            }
             fftw_execute(plan);
-            // used for gain ctl
-            double rms = 0;
             {
-                std::unique_lock _(buffer_lock);
-                for (size_t i = 0; i < complex_count + 1; i++) {
-                    auto out = hypot(fftw_out[i][0], fftw_out[i][1]);
-                    rms += out * out / complex_count;
-                    out = std::min(out, 1.0);
-                    auto &finalized = buffer[i];
-                    // keep peeks
-                    finalized = std::max(out, finalized);
-                    // gravitating to make sure peeks arent horrible
-                    if (finalized >= gravity) {
-                        finalized -= gravity;
-                    } else {
-                        finalized = 0;
-                    }
+                auto [data, _] = buffer.acquire();
+                for (size_t i = 0; i < buffer.data_size; i++) {
+                    data[i] = hypot(fftw_out[i][0], fftw_out[i][1]);
                 }
-            }
-
-            // gain ctl
-            if (rms > 0.5 * 0.5) {
-                gain -= 0.1;
-            } else if (rms < 0.3 * 0.3) {
-                gain += 0.1;
-            }
-            if (gain > 1) {
-                gain = 1;
+                for (auto &filter : filters) {
+                    filter->apply(data);
+                }
             }
         }
         fftw_destroy_plan(plan);
     } // namespace visualize
+
+    void rescale_rects(std::unique_ptr<SDL_Rect[]> &rects, int width) {
+        auto barcount = int(visualize::config.barcount);
+        int w = width / barcount;
+        int cpos = width % barcount / 2;
+        std::for_each(&rects[0], &rects[size_t(barcount)], [w, &cpos](auto &r) {
+            r.w = w;
+            r.x = cpos;
+            r.y = 1;
+            r.h = 10;
+            cpos += w;
+        });
+    }
 } // namespace visualize
 
-void rescale_rects(std::unique_ptr<SDL_Rect[]> &rects, int width) {
-    auto barcount = int(visualize::config.barcount);
-    int w = width / barcount;
-    int cpos = width % barcount / 2;
-    std::for_each(&rects[0], &rects[size_t(barcount)], [w, &cpos](auto &r) {
-        r.w = w;
-        r.x = cpos;
-        r.y = 1;
-        r.h = 10;
-        cpos += w;
-    });
-}
-
 int main() {
-    size_t buffer_size = 2048;
-    visualize::buffer = std::make_unique<double[]>(buffer_size * 2);
-    std::thread audio_thread(visualize::audio_thread, buffer_size,
-                             std::make_unique<visualize::pulseaudio_source>(buffer_size * 2));
+    visualize::buffer buf(visualize::config.resolution);
+    std::atomic_bool run = true;
+    std::thread audio_thread([&buf, &run]() {
+        std::vector<std::unique_ptr<visualize::filter>> filters;
+
+        filters.emplace_back(new visualize::sagc_filter(buf.data_size));
+        filters.emplace_back(new visualize::clip_filter(buf.data_size));
+        filters.emplace_back(new visualize::peek_filter(buf.data_size, visualize::config.gravity));
+
+        visualize::audio_thread(
+            run, buf, [&buf]() { return std::make_unique<visualize::pulseaudio_source>(buf.data_size * 2); }, filters);
+    });
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     auto window = SDL_CreateWindow("Visualizer", 100, 100, 800, 480, SDL_WINDOW_RESIZABLE);
     auto renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
@@ -110,24 +121,24 @@ int main() {
     int width, height;
     auto rects = std::make_unique<SDL_Rect[]>(size_t(visualize::config.barcount));
     SDL_GetWindowSize(window, &width, &height);
-    rescale_rects(rects, width);
-    while (visualize::run.load(std::memory_order_relaxed)) {
+    visualize::rescale_rects(rects, width);
+    while (run.load(std::memory_order_relaxed)) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
-            case SDL_QUIT: visualize::run.store(false, std::memory_order_relaxed); break;
+            case SDL_QUIT: run.store(false, std::memory_order_relaxed); break;
             case SDL_WINDOWEVENT: {
                 if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
                     width = event.window.data1;
                     height = event.window.data2;
-                    rescale_rects(rects, width);
+                    visualize::rescale_rects(rects, width);
                 }
                 break;
             }
             case SDL_KEYDOWN: {
                 auto sym = event.key.keysym;
                 if (sym.sym == SDLK_q && !sym.mod) {
-                    visualize::run.store(false, std::memory_order_relaxed);
+                    run.store(false, std::memory_order_relaxed);
                 } else if (sym.sym == SDLK_F11 && !sym.mod) {
                     SDL_SetWindowFullscreen(window, ~SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
                 }
@@ -135,16 +146,17 @@ int main() {
             }
             }
         }
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        auto [foreground, background] = std::tie(visualize::config.foreground, visualize::config.background);
+        SDL_SetRenderDrawColor(renderer, background.r, background.g, background.b, 255);
         SDL_RenderClear(renderer);
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_SetRenderDrawColor(renderer, foreground.r, foreground.g, foreground.b, 255);
 
         std::fill_n(bars.get(), visualize::config.barcount, 0);
         {
-            auto per_bar = buffer_size / size_t(visualize::config.barcount);
-            std::unique_lock _(visualize::buffer_lock);
+            auto per_bar = buf.data_size / size_t(visualize::config.barcount);
+            auto [buffer, _] = buf.acquire();
             for (size_t i = 0; i < per_bar * size_t(visualize::config.barcount); i++) {
-                bars[i / per_bar] += visualize::buffer[i] / double(per_bar);
+                bars[i / per_bar] += buffer[i] / double(per_bar);
             }
         }
 
@@ -161,6 +173,7 @@ int main() {
     }
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    SDL_QuitSubSystem(SDL_INIT_EVERYTHING);
     SDL_Quit();
     audio_thread.join();
 }

@@ -14,26 +14,24 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef PULSEAUDIO_HPP
-#define PULSEAUDIO_HPP
 
-#include "../data_source.hpp"
-#include <pulse/simple.h>
+#include "filters/sagc_filter.hpp"
 
-namespace visualize {
-    struct pulseaudio_source : public data_source {
-        pulseaudio_source(size_t buffer_len);
-        ~pulseaudio_source() override;
-        // disable copy
-        pulseaudio_source(const pulseaudio_source &) = delete;
-        pulseaudio_source &operator=(const pulseaudio_source &) = delete;
+visualize::sagc_filter::sagc_filter(size_t data_size) : data_size(data_size) {}
 
-    private:
-        bool do_grab_audio(double *output) override;
-        size_t buffer_len;
-        pa_simple *simple = nullptr;
-        std::unique_ptr<int16_t[]> pulse_buffer;
-    };
-} // namespace visualize
+void visualize::sagc_filter::do_apply(double *data) {
+    double rms = 0;
+    for (size_t i = 0; i < data_size; i++) {
+        auto &current = data[i];
+        current *= gain;
+        rms += current * current / data_size;
+    }
 
-#endif // PULSEAUDIO_HPP
+#define sq(n) n *n
+    if (rms > sq(0.5)) {
+        gain *= 0.85;
+    } else if (rms < sq(0.3)) {
+        gain *= 1.1;
+    }
+#undef sq
+}

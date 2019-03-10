@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 namespace visualize {
+    //! Abstraction for data collection from various sources (e.g. sound servers)
     struct data_source {
         data_source(size_t buffer_len);
         virtual ~data_source() = default;
@@ -34,10 +35,10 @@ namespace visualize {
          * normalization is not a guarantee
          *
          * \param output Output buffer. If the data retreived is stereo it will get mixed together before it's
-         * outputted. \param gain The gain to apply to each sample. \returns \p false if retreival failed. The program
-         * is preticted to exit if data retreival fails.
+         * outputted.
+         * \returns \p false if retreival failed. The program is preticted to exit if data retreival fails.
          */
-        bool grab_audio(double *output, double gain);
+        bool grab_audio(double *output);
 
     private:
         /** \brief Synchronously grabs unprocessed audio from the server.
@@ -48,11 +49,11 @@ namespace visualize {
          * \param buffer_len Target buffer length, in elements
          * \return false on failure, prints the error message, if any.
          */
-        virtual bool do_grab_audio(double *output, size_t buffer_len) = 0;
+        virtual bool do_grab_audio(double *output) = 0;
 
         size_t buffer_len;
-        std::unique_ptr<double[]> buffer;
         std::unique_ptr<double[]> window_func_table;
+        std::unique_ptr<double[]> unwindowed;
     };
 } // namespace visualize
 

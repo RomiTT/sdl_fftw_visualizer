@@ -15,24 +15,24 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "data_source.hpp"
-#include <math.h>
+#include <cmath>
 
 visualize::data_source::data_source(size_t buffer_len) :
     buffer_len(buffer_len),
-    buffer(std::make_unique<double[]>(buffer_len)),
-    window_func_table(std::make_unique<double[]>(buffer_len)) {
+    window_func_table(std::make_unique<double[]>(buffer_len)),
+    unwindowed(std::make_unique<double[]>(buffer_len)) {
     // calculate windowing function for each point of the sample
     for (size_t i = 0; i < buffer_len; i++) {
         window_func_table[i] = (1 + cos(i / buffer_len * M_PI)) / 2;
     }
 }
 
-bool visualize::data_source::grab_audio(double *output, double gain) {
-    if (!do_grab_audio(buffer.get(), buffer_len)) {
+bool visualize::data_source::grab_audio(double *output) {
+    if (!do_grab_audio(unwindowed.get())) {
         return false;
     }
     for (size_t i = 0; i < buffer_len; i++) {
-        output[i] = buffer[i] * window_func_table[i] * gain;
+        output[i] = unwindowed[i] * window_func_table[i];
     }
     return true;
 }

@@ -31,7 +31,9 @@ void visualize::sagc_filter::do_apply(double *data) {
     if (rms > sq(0.5)) {
         gain *= 0.85;
     } else if (rms < sq(0.3)) {
-        gain *= 1.1;
+        if (gain < 2) {
+            gain *= 1.1;
+        }
     }
 #undef sq
 }

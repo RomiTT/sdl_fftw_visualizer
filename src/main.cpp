@@ -53,6 +53,7 @@ namespace visualize {
     static struct {
         //! gravity shall be 1000 * peek_reduction_per_sample
         double gravity = 100.0 / 6.0;
+
         int barcount = 160;
         size_t resolution = 2048;
         color background = { 0, 0, 0 };
@@ -167,6 +168,8 @@ int main() {
 
         if (SDL_RenderFillRects(renderer, rects.get(), int(visualize::config.barcount)) < 0) {
             std::cerr << SDL_GetError() << std::endl;
+            run.store(false, std::memory_order_relaxed);
+            break;
         }
 
         SDL_RenderPresent(renderer);

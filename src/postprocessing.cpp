@@ -14,24 +14,18 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "filters/peek_filter.hpp"
+#include "postprocessing.hpp"
 
-visualize::peek_filter::peek_filter(size_t data_size, double gravity) :
-    peeks(std::make_unique<double[]>(data_size)),
-    data_size(data_size),
-    gravity(gravity / 1000) {}
-
-void visualize::peek_filter::do_apply(double *data) {
-    for (size_t i = 0; i < data_size; i++) {
-        auto &peek = peeks[i];
-        auto &curr = data[i];
-        peek = std::max(curr, peek);
-        curr = (curr + peek) / 2;
-
-        if (peek >= gravity) {
-            peek -= gravity;
-        } else {
-            peek = 0;
-        }
+void visualize::calculate_bars(double *bars, size_t barcount, const double *buffer, size_t buffer_size) {
+    std::fill_n(bars, barcount, 0);
+    auto per_bar = buffer_size / barcount;
+    for (size_t i = 0; i < per_bar * barcount; i++) {
+        bars[i / per_bar] += buffer[i] / double(per_bar);
     }
 }
+
+std::pair<double *, std::unique_lock<std::mutex>> visualize::buffer::acquire() {
+    return std::make_pair(data.get(), std::unique_lock(lock));
+}
+
+visualize::buffer::buffer(size_t size) : data_size(size), data(std::make_unique<double[]>(size)) {}

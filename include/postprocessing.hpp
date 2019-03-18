@@ -14,24 +14,36 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "filters/peek_filter.hpp"
+#ifndef POSTPROCESSING_HPP
+#define POSTPROCESSING_HPP
 
-visualize::peek_filter::peek_filter(size_t data_size, double gravity) :
-    peeks(std::make_unique<double[]>(data_size)),
-    data_size(data_size),
-    gravity(gravity / 1000) {}
+#include "data_source.hpp"
+#include "filter.hpp"
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <vector>
 
-void visualize::peek_filter::do_apply(double *data) {
-    for (size_t i = 0; i < data_size; i++) {
-        auto &peek = peeks[i];
-        auto &curr = data[i];
-        peek = std::max(curr, peek);
-        curr = (curr + peek) / 2;
+namespace visualize {
+    struct buffer {
+        explicit buffer(size_t size);
+        ~buffer() = default;
+        std::pair<double *, std::unique_lock<std::mutex>> acquire();
 
-        if (peek >= gravity) {
-            peek -= gravity;
-        } else {
-            peek = 0;
-        }
-    }
-}
+        buffer(const buffer &other) = delete;
+        buffer &operator=(const buffer &other) = delete;
+        buffer(buffer &&) = delete;
+        buffer &operator=(buffer &&) = delete;
+
+        const size_t data_size;
+
+    private:
+        std::unique_ptr<double[]> data;
+        std::mutex lock;
+    };
+    void calculate_bars(double *bars, size_t barcount, const double *buffer, size_t buffer_size);
+} // namespace visualize
+
+#endif // POSTPROCESSING_HPP

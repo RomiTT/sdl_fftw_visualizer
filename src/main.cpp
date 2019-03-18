@@ -15,6 +15,7 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "postprocessing.hpp"
 #include <SDL.h>
 #include <atomic>
 #include <cmath>
@@ -34,36 +35,44 @@ namespace visualize {
         uint8_t r, g, b;
     };
 
-    struct buffer {
-        buffer(size_t size) : data_size(size), data(std::make_unique<double[]>(size)) {}
-        std::pair<double *, std::unique_lock<std::mutex>> acquire() {
-            return std::make_pair(data.get(), std::unique_lock(lock));
-        }
-
-        buffer(const buffer &other) = delete;
-        buffer &operator=(const buffer &other) = delete;
-
-        const size_t data_size;
-
-    private:
-        std::unique_ptr<double[]> data;
-        std::mutex lock;
-    };
-
-    static struct {
-        //! gravity shall be 1000 * peek_reduction_per_sample
+    //! configuration interface
+    static constexpr struct config {
+        /** \brief speed of peek reduction
+         * gravity is defined to be 1000 * peek_reduction_per_sample
+         */
         double gravity = 100.0 / 6.0;
 
+        /** \brief number of bars to display on screen
+         *
+         * best results are achieved by using fullscreen and having
+         * \code
+         *  screen_width = n * barcount
+         * \endcode
+         * where n is a positive integer
+         */
         int barcount = 160;
+        /** \brief size of fftw output
+         *
+         * the amount of samples taken for each fftw input is twice the amount of output
+         */
         size_t resolution = 2048;
+        //! window backgrond color
         color background = { 0, 0, 0 };
+        //! bar foregrond color
         color foreground = { 255, 255, 255 };
+
+        //! which source to gather data from (see \p data_sources)
+        using source = pulseaudio_source;
+
+        //! SDL_Window flags
+        Uint32 window_flags = SDL_WINDOW_RESIZABLE;
+        // for example SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN to start fullscreen
+        //! SDL_Renderer flags
+        Uint32 renderer_flags = SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED;
     } config;
 
-    void audio_thread(std::atomic_bool &run, buffer &buffer, std::function<std::unique_ptr<data_source>()> factory,
+    void audio_thread(std::atomic_bool &run, buffer &buffer, std::unique_ptr<data_source> src,
                       std::vector<std::unique_ptr<filter>> &filters) {
-        auto src = factory();
-
         auto fftw_in = std::make_unique<double[]>(buffer.data_size * 2);
         auto fftw_out = std::make_unique<fftw_complex[]>(buffer.data_size + 1);
         auto plan = fftw_plan_dft_r2c_1d(int(buffer.data_size * 2), fftw_in.get(), fftw_out.get(), FFTW_MEASURE);
@@ -87,6 +96,7 @@ namespace visualize {
         fftw_destroy_plan(plan);
     } // namespace visualize
 
+    //! sets up the bars after screen resizes
     void rescale_rects(std::unique_ptr<SDL_Rect[]> &rects, int width) {
         auto barcount = int(visualize::config.barcount);
         int w = width / barcount;
@@ -111,12 +121,11 @@ int main() {
         filters.emplace_back(new visualize::clip_filter(buf.data_size));
         filters.emplace_back(new visualize::peek_filter(buf.data_size, visualize::config.gravity));
 
-        visualize::audio_thread(
-            run, buf, [&buf]() { return std::make_unique<visualize::pulseaudio_source>(buf.data_size * 2); }, filters);
+        visualize::audio_thread(run, buf, std::make_unique<visualize::config::source>(buf.data_size * 2), filters);
     });
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-    auto window = SDL_CreateWindow("Visualizer", 100, 100, 800, 480, SDL_WINDOW_RESIZABLE);
-    auto renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+    auto window = SDL_CreateWindow("Visualizer", 100, 100, 800, 480, visualize::config.window_flags);
+    auto renderer = SDL_CreateRenderer(window, -1, visualize::config.renderer_flags);
     auto bars = std::make_unique<double[]>(size_t(visualize::config.barcount));
 
     int width, height;
@@ -125,7 +134,7 @@ int main() {
     visualize::rescale_rects(rects, width);
     while (run.load(std::memory_order_relaxed)) {
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
+        while (bool(SDL_PollEvent(&event))) {
             switch (event.type) {
             case SDL_QUIT: run.store(false, std::memory_order_relaxed); break;
             case SDL_WINDOWEVENT: {
@@ -138,9 +147,9 @@ int main() {
             }
             case SDL_KEYDOWN: {
                 auto sym = event.key.keysym;
-                if (sym.sym == SDLK_q && !sym.mod) {
+                if (sym.sym == SDLK_q && sym.mod == 0) {
                     run.store(false, std::memory_order_relaxed);
-                } else if (sym.sym == SDLK_F11 && !sym.mod) {
+                } else if (sym.sym == SDLK_F11 && sym.mod == 0) {
                     SDL_SetWindowFullscreen(window, ~SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN);
                 }
                 break;
@@ -148,17 +157,13 @@ int main() {
             }
         }
         auto [foreground, background] = std::tie(visualize::config.foreground, visualize::config.background);
-        SDL_SetRenderDrawColor(renderer, background.r, background.g, background.b, 255);
+        SDL_SetRenderDrawColor(renderer, background.r, background.g, background.b, SDL_ALPHA_OPAQUE);
         SDL_RenderClear(renderer);
-        SDL_SetRenderDrawColor(renderer, foreground.r, foreground.g, foreground.b, 255);
+        SDL_SetRenderDrawColor(renderer, foreground.r, foreground.g, foreground.b, SDL_ALPHA_OPAQUE);
 
-        std::fill_n(bars.get(), visualize::config.barcount, 0);
         {
-            auto per_bar = buf.data_size / size_t(visualize::config.barcount);
             auto [buffer, _] = buf.acquire();
-            for (size_t i = 0; i < per_bar * size_t(visualize::config.barcount); i++) {
-                bars[i / per_bar] += buffer[i] / double(per_bar);
-            }
+            visualize::calculate_bars(bars.get(), visualize::config.barcount, buffer, buf.data_size);
         }
 
         for (size_t i = 0; i < size_t(visualize::config.barcount); i++) {

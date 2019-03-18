@@ -14,24 +14,26 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "filters/peek_filter.hpp"
+#include "postprocessing.hpp"
+#include <algorithm>
+#include <gtest/gtest.h>
 
-visualize::peek_filter::peek_filter(size_t data_size, double gravity) :
-    peeks(std::make_unique<double[]>(data_size)),
-    data_size(data_size),
-    gravity(gravity / 1000) {}
+TEST(postprocessing, calculate_bars) {
+    const double input[] = { 1, 1, 1, 0, 0.5, 0, 0.5, 1, 0.2, 1 };
+    const double expected_out[] = { 1, 0.5, 0.25, 0.75, 0.6 };
+    double output[std::size(expected_out)] = { 0 };
+    visualize::calculate_bars(output, std::size(output), input, std::size(input));
+    ASSERT_TRUE(std::equal(std::cbegin(expected_out), std::cend(expected_out), std::cbegin(output)));
+}
 
-void visualize::peek_filter::do_apply(double *data) {
-    for (size_t i = 0; i < data_size; i++) {
-        auto &peek = peeks[i];
-        auto &curr = data[i];
-        peek = std::max(curr, peek);
-        curr = (curr + peek) / 2;
-
-        if (peek >= gravity) {
-            peek -= gravity;
-        } else {
-            peek = 0;
-        }
+TEST(postprocessing, buffer) {
+    visualize::buffer buf(10);
+    {
+        auto [ptr, _] = buf.acquire();
+        std::fill_n(ptr, buf.data_size, 1.0);
+    }
+    {
+        auto [ptr, _] = buf.acquire();
+        ASSERT_TRUE(std::all_of(ptr, &ptr[buf.data_size], [](auto &a) { return a == 1.0; }));
     }
 }

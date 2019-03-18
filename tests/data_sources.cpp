@@ -14,24 +14,36 @@
  * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "filters/peek_filter.hpp"
+#include "data_source.hpp"
+#include <cmath>
+#include <gtest/gtest.h>
 
-visualize::peek_filter::peek_filter(size_t data_size, double gravity) :
-    peeks(std::make_unique<double[]>(data_size)),
-    data_size(data_size),
-    gravity(gravity / 1000) {}
+struct null_source : public visualize::data_source {
+    null_source(size_t size) : visualize::data_source(size), size(size) {}
+    ~null_source() override = default;
 
-void visualize::peek_filter::do_apply(double *data) {
-    for (size_t i = 0; i < data_size; i++) {
-        auto &peek = peeks[i];
-        auto &curr = data[i];
-        peek = std::max(curr, peek);
-        curr = (curr + peek) / 2;
-
-        if (peek >= gravity) {
-            peek -= gravity;
-        } else {
-            peek = 0;
+private:
+    bool do_grab_audio(double *buf) override {
+        if (next_null) {
+            return false;
         }
+        next_null = true;
+        std::fill_n(buf, size, 1.0);
+        return true;
     }
+
+    bool next_null = false;
+    size_t size;
+};
+
+double data[314];
+double data_expected[std::size(data)];
+TEST(data_source, null_source) {
+    for (size_t i = 0; i < std::size(data); i++) {
+        data_expected[i] = (1 + cos(i / std::size(data) * M_PI)) / 2;
+    }
+    null_source src(std::size(data));
+    ASSERT_TRUE(src.grab_audio(data));
+    std::equal(std::begin(data), std::end(data), std::begin(data_expected));
+    ASSERT_FALSE(src.grab_audio(data));
 }

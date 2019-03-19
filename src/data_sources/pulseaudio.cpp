@@ -25,10 +25,10 @@ namespace {
 visualize::pulseaudio_source::pulseaudio_source(size_t buffer_len) :
     data_source(buffer_len),
     buffer_len(buffer_len),
-    pulse_buffer(std::make_unique<int16_t[]>(buffer_len)) {
+    pulse_buffer(std::make_unique<int16_t[]>(buffer_len * 2)) {
     int err;
     simple = pa_simple_new(nullptr, "visualizer", PA_STREAM_RECORD, nullptr, "record", &spec, nullptr, nullptr, &err);
-    if (!simple) {
+    if (!bool(simple)) {
         std::cerr << "Pulse connection error: " << pa_strerror(err) << std::endl;
     } else {
         std::cout << "Connected to PA" << std::endl;
@@ -36,21 +36,22 @@ visualize::pulseaudio_source::pulseaudio_source(size_t buffer_len) :
 }
 
 visualize::pulseaudio_source::~pulseaudio_source() {
-    if (simple) {
+    if (bool(simple)) {
         pa_simple_free(simple);
     }
 }
 
 bool visualize::pulseaudio_source::do_grab_audio(double *output) {
-    if (!simple) {
+    if (!bool(simple)) {
         return false;
     }
     int err;
-    if (pa_simple_read(simple, pulse_buffer.get(), buffer_len, &err) < 0) {
+    if (pa_simple_read(simple, pulse_buffer.get(), buffer_len * 2, &err) < 0) {
         std::cerr << "Pulse read error: " << err << std::endl;
     }
-    for (size_t i = 0; i < buffer_len; i++) {
-        output[i] = static_cast<double>(pulse_buffer[i]) / std::numeric_limits<int16_t>::max();
+    for (size_t i = 0; i < buffer_len; i += 2) {
+        output[i] = (static_cast<double>(pulse_buffer[i]) + static_cast<double>(pulse_buffer[i + 1])) / 2
+                    / std::numeric_limits<int16_t>::max();
     }
     return true;
 }
